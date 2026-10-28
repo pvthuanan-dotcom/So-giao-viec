@@ -5,7 +5,7 @@ window.APP_CONFIG = {
   clientId: 'a5d300ca-66ed-4914-bdb1-f53dde904461',
   tenantId: '702a8705-6ea7-4d2c-9ec4-159c1853e8fe',
   // Đường dẫn ứng dụng sau khi đặt lên GitHub Pages, ví dụ 'https://tenban.github.io/so-giao-viec/'. Để trống thì tự lấy theo địa chỉ đang mở.
-  redirectUri: 'https://github.com/pvthuanan-dotcom/So-giao-viec/',
+  redirectUri: 'https://pvthuanan-dotcom.github.io/So-giao-viec/',
   siteHost: 'ngohoangvn.sharepoint.com',
   sitePath: '/sites/SERVICE',
   listTasks: 'Sổ giao việc',
