@@ -25,7 +25,7 @@ window.SGV = window.SGV || {};
       if (account) app.setActiveAccount(account);
       return account;
     },
-    login: function () { return app.loginRedirect({ scopes: SCOPES }); },
+    login: function () { return app.loginRedirect({ scopes: SCOPES, prompt: 'select_account' }); },
     logout: function () { return app.logoutRedirect({ account: account }); },
     account: function () { return account; },
     async token() {

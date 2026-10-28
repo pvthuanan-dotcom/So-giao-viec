@@ -414,7 +414,12 @@
       if (C.refreshSeconds && !st.mock) setInterval(function () { if (!document.hidden && !st.drawer) reload(true); }, C.refreshSeconds * 1000);
     } catch (e) {
       console.error(e);
-      gate('Không mở được dữ liệu.', !st.mock && S.Auth.configured(), e.message);
+      var acc2 = !st.mock && S.Auth.configured() && S.Auth.account && S.Auth.account();
+      if (acc2) {
+        gate('Đang đăng nhập bằng <b>' + esc(acc2.username) + '</b> nhưng tài khoản này chưa mở được dữ liệu. Anh chọn đúng tài khoản công ty (@cnh.com.vn).', false, e.message);
+        var g = $('.gate'), b2 = document.createElement('button'); b2.className = 'btn pri'; b2.textContent = 'Đăng xuất, chọn tài khoản khác';
+        b2.addEventListener('click', function () { S.Auth.logout(); }); g.insertBefore(b2, g.querySelector('.note'));
+      } else gate('Không mở được dữ liệu.', !st.mock && S.Auth.configured(), e.message);
     }
   }
   S.boot = boot;
