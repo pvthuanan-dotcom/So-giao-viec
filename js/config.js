@@ -2,10 +2,10 @@
    Sau khi quản trị viên đăng ký ứng dụng trong Microsoft Entra, điền clientId và tenantId vào đây. */
 window.APP_CONFIG = {
   orgName: 'CNH · Kỹ thuật',
-  clientId: 'DIEN-CLIENT-ID',
-  tenantId: 'DIEN-TENANT-ID',
+  clientId: 'a5d300ca-66ed-4914-bdb1-f53dde904461',
+  tenantId: '702a8705-6ea7-4d2c-9ec4-159c1853e8fe',
   // Đường dẫn ứng dụng sau khi đặt lên GitHub Pages, ví dụ 'https://tenban.github.io/so-giao-viec/'. Để trống thì tự lấy theo địa chỉ đang mở.
-  redirectUri: '',
+  redirectUri: 'https://github.com/pvthuanan-dotcom/So-giao-viec/',
   siteHost: 'ngohoangvn.sharepoint.com',
   sitePath: '/sites/SERVICE',
   listTasks: 'Sổ giao việc',
