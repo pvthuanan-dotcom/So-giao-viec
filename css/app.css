@@ -186,3 +186,27 @@ td.code { color: var(--ink3); font-size: 12px; white-space: nowrap; }
   .drawer { width: 100vw; }
 }
 @media print { .side, .top .btn, .bottomnav { display: none; } .shell { display: block; } }
+
+#modal .drawer.wide { width: min(860px, 100vw); }
+#modal .scrim { z-index: 30; } #modal .drawer { z-index: 31; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0 14px; }
+.tbl th, .tbl td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl tr.dim { opacity: .6; }
+.sm { font-size: 12.5px; } .banner.ok { background: var(--ok-soft, #e6f6ec); } .banner.err { background: #fde8e8; }
+#modal h3 { font-size: 14px; margin: 14px 0 4px; }
+.sp { flex: 1; }
+
+.rp-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.segs { display: inline-flex; background: var(--mute-soft); border-radius: 9px; padding: 3px; }
+.segs button { border: 0; background: transparent; padding: 6px 12px; border-radius: 7px; font-weight: 600; color: var(--ink2); }
+.segs button.on { background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+.rp-row { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 8px; }
+.rp-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
+.rp-fields { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px; align-items: start; }
+.rp-ta, .rp-in { width: 100%; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); border-radius: 8px; padding: 8px 10px; font: inherit; resize: vertical; }
+.rp-sum .lbl { display: block; font-weight: 600; font-size: 13px; margin-bottom: 10px; } .rp-sum .lbl .rp-ta, .rp-sum .lbl .rp-in { margin-top: 4px; font-weight: 400; }
+.rp-foot { display: flex; gap: 8px; margin-top: 14px; }
+.rp-person { margin-bottom: 12px; } .rp-ph { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rp-line { display: grid; grid-template-columns: minmax(0, 1.2fr) 130px minmax(0, 2fr); gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; align-items: start; }
+.rp-res { color: var(--ink2); white-space: pre-wrap; } .rp-extra { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; font-size: 13px; color: var(--ink2); display: grid; gap: 4px; }
+@media (max-width: 700px) { .rp-fields, .rp-line { grid-template-columns: 1fr; } }

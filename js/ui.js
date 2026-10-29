@@ -11,6 +11,8 @@ window.SGV = window.SGV || {};
     plus: '<path d="M12 5v14M5 12h14"/>',
     search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
     refresh: '<path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/>',
+    upload: '<path d="M12 16V5M7 9l5-5 5 5M4 20h16"/>',
+    report: '<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7"/>',
     download: '<path d="M12 4v11M7 11l5 5 5-5M4 20h16"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     logout: '<path d="M9 4H5v16h4M16 8l4 4-4 4M20 12H9"/>'
@@ -305,5 +307,112 @@ window.SGV = window.SGV || {};
       '<button class="btn" data-act="close">Đóng</button><span style="flex:1"></span>' +
       (!isNew && adm ? '<button class="btn bad" data-act="del" data-id="' + t.id + '">Xóa việc</button>' : '') + '</footer></aside>';
     return h;
+  };
+
+  /* ---------- Hộp nhập báo cáo tuần ---------- */
+  S.viewImport = function (st) {
+    var im = st.imp; if (!im) return '';
+    var h = '<div class="scrim" data-act="impClose"></div><aside class="drawer wide" role="dialog" aria-label="Nhập báo cáo tuần"><header><h2>Nhập báo cáo tuần</h2><button class="iconbtn" data-act="impClose" title="Đóng">' + S.icon('x') + '</button></header><div class="body">';
+    if (im.busy) { h += '<div class="loading">' + esc(im.busy) + '</div></div></aside>'; return h; }
+    if (im.done) {
+      h += '<div class="banner ok">' + esc(im.done) + '</div></div><footer><button class="btn pri" data-act="impClose">Đóng</button></footer></aside>'; return h;
+    }
+    var pl = im.plan;
+    if (!pl) {
+      h += '<p>Chọn các file báo cáo tuần (<b>BCT_Wxx-2026_Sx_….xlsx</b>) mà nhân viên đã gửi. Có thể chọn nhiều file một lúc. Ứng dụng chỉ đọc, chưa ghi gì cho đến khi anh bấm xác nhận.</p>' +
+        '<p><button class="btn pri" data-act="impPick">' + S.icon('upload') + ' Chọn file Excel…</button></p>' + (im.error ? '<div class="banner err">' + esc(im.error) + '</div>' : '');
+      return h + '</div></aside>';
+    }
+    var nUp = pl.updates.filter(function (u) { return u.include; }).length, nPr = pl.proposals.filter(function (u) { return u.include; }).length;
+    h += '<h3>Các file đã đọc</h3><table class="tbl"><thead><tr><th>File</th><th>Người</th><th>Tuần</th><th>Dòng việc</th><th>Đề xuất</th></tr></thead><tbody>' +
+      pl.files.map(function (f) {
+        if (f.error) return '<tr><td>' + esc(f.name) + '</td><td colspan="4"><span class="chip late">' + esc(f.error) + '</span></td></tr>';
+        return '<tr><td class="sm">' + esc(f.name) + '</td><td>' + esc(f.who) + (f.person ? '' : ' <span class="chip warn">chưa khớp người dùng</span>') + '</td><td>' + esc(f.week) + '</td><td>' + f.entries + '</td><td>' + f.proposals + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    h += '<h3>Cập nhật việc đã giao (' + nUp + '/' + pl.updates.length + ' sẽ ghi)</h3>';
+    if (!pl.updates.length) h += '<p class="note">Không có dòng nào khớp mã việc trong Sổ giao việc.</p>';
+    else h += '<table class="tbl"><thead><tr><th></th><th>Mã</th><th>Việc</th><th>Người báo</th><th>Thay đổi</th></tr></thead><tbody>' + pl.updates.map(function (u, i) {
+      var ch = [];
+      if (u.patch.status) ch.push(esc(u.from.status) + ' → <b>' + esc(u.patch.status) + '</b>');
+      if (u.patch.progress != null) ch.push('tiến độ ' + u.patch.progress + '%');
+      if (!ch.length) ch.push(u.driver ? 'giữ nguyên trạng thái' : 'chỉ ghi chú (' + u.role + ')');
+      return '<tr class="' + (u.already ? 'dim' : '') + '"><td><input type="checkbox" data-imp="u' + i + '"' + (u.include ? ' checked' : '') + '></td><td><b>' + esc(u.code) + '</b></td><td class="sm">' + esc(u.title) + '</td><td>' + esc(u.who) + '<br><span class="note">' + esc(u.rating || '') + '</span></td><td class="sm">' + ch.join('; ') + (u.already ? '<br><span class="chip">đã nhập trước đó</span>' : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    if (pl.unmatched.length) h += '<h3>Mã việc không có trong Sổ giao việc (' + pl.unmatched.length + ')</h3><p class="note">Các dòng này sẽ không được ghi. Có thể nhân viên gõ sai mã hoặc việc chưa được giao.</p><ul class="sm">' + pl.unmatched.map(function (u) { return '<li><b>' + esc(u.code) + '</b> — ' + esc(u.who) + (u.did ? ': ' + esc(u.did.slice(0, 90)) : '') + '</li>'; }).join('') + '</ul>';
+    h += '<h3>Việc nhân viên đề xuất (' + nPr + '/' + pl.proposals.length + ' sẽ tạo)</h3>';
+    if (!pl.proposals.length) h += '<p class="note">Không có đề xuất mới.</p>';
+    else h += '<table class="tbl"><thead><tr><th></th><th>Mã tạm</th><th>Nội dung</th><th>Người đề xuất</th></tr></thead><tbody>' + pl.proposals.map(function (u, i) {
+      return '<tr class="' + (u.dup ? 'dim' : '') + '"><td><input type="checkbox" data-imp="p' + i + '"' + (u.include ? ' checked' : '') + (u.owner ? '' : ' disabled') + '></td><td><b>' + esc(u.code) + '</b></td><td class="sm">' + esc(u.text) + '</td><td>' + esc(u.who) + (u.dup ? '<br><span class="chip">đã có</span>' : '') + (u.owner ? '' : '<br><span class="chip warn">không khớp người dùng</span>') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    if (pl.opinions.length) h += '<h3>Ý kiến đề xuất (' + pl.opinions.length + ')</h3><p class="note">Chỉ để anh đọc, ứng dụng không ghi.</p><ul class="sm">' + pl.opinions.map(function (o) { return '<li><b>' + esc(o.who) + ':</b> ' + esc(o.text) + '</li>'; }).join('') + '</ul>';
+    h += '</div><footer><button class="btn" data-act="impPick">Chọn file khác</button><span class="sp"></span><button class="btn" data-act="impClose">Hủy</button><button class="btn pri" data-act="impApply"' + (nUp + nPr ? '' : ' disabled') + '>Xác nhận ghi ' + (nUp + nPr) + ' mục</button></footer></aside>';
+    return h;
+  };
+
+  /* ---------- Báo cáo tuần ---------- */
+  var RCLS = { 'Hoàn thành': 'ok', 'Đang thực hiện': 'info', 'Chờ quyết định': 'warn', 'Chưa hoàn thành': 'late' };
+  var rchip = function (r) { return r ? '<span class="chip ' + (RCLS[r] || '') + '">' + esc(r) + '</span>' : ''; };
+
+  function repMine(st) {
+    var R = st.rep, me = st.me, wk = R.week;
+    if (!me || !me.id) return '<div class="empty">Tài khoản này chưa có trong danh sách người dùng của site SERVICE nên chưa báo cáo được.</div>';
+    var sm = R.sum, subRow = st.reports.filter(function (r) { return r.kind === 'Tổng kết' && r.week === wk && r.who === me.id; })[0];
+    var tasks = st.tasks.filter(function (t) {
+      if (t.approval === 'Từ chối' || !(t.owner === me.id || (t.collab || []).indexOf(me.id) >= 0)) return false;
+      return !S.isDone(t) || R.drafts[t.id];
+    }).sort(function (a, b) { return (a.due || '9999').localeCompare(b.due || '9999'); });
+    var h = subRow ? '<div class="banner ok">Anh đã nộp báo cáo ' + esc(wk) + ' ngày ' + S.fmtFull(subRow.date) + '. Anh vẫn sửa được và nộp lại.</div>' :
+      '<div class="banner">Báo cáo ' + esc(wk) + ' chưa nộp. Chọn đánh giá và ghi kết quả cho từng việc, rồi bấm <b>Nộp báo cáo</b>.</div>';
+    h += '<div class="group"><h3>Việc của tôi <span class="chip">' + tasks.length + '</span></h3>';
+    if (!tasks.length) h += '<div class="empty">Không có việc đang mở. Anh có thể ghi ý kiến hoặc kế hoạch tuần tới ở phía dưới.</div>';
+    h += tasks.map(function (t) {
+      var d = R.drafts[t.id] || { rating: '', result: '' };
+      return '<div class="rp-row"><div class="rp-head"><div><div class="ttitle">' + esc(t.title) + '</div><div class="tmeta"><span>' + esc(t.code) + '</span>' + (t.project ? '<span>' + esc(t.project) + '</span>' : '') +
+        (t.owner === me.id ? '' : '<span class="chip">phối hợp</span>') + '</div></div><div>' + S.dueChip(t) + '</div></div>' +
+        '<div class="rp-fields"><label class="field"><select data-rp="rating" data-id="' + t.id + '"><option value="">Chưa báo cáo</option>' +
+        S.RATINGS.map(function (x) { return '<option' + (d.rating === x ? ' selected' : '') + '>' + x + '</option>'; }).join('') + '</select></label>' +
+        '<textarea class="rp-ta" rows="2" data-rp="result" data-id="' + t.id + '" placeholder="Kết quả tuần này: đã làm gì, còn vướng gì">' + esc(d.result || '') + '</textarea></div></div>';
+    }).join('') + '</div>';
+    h += '<div class="card rp-sum"><h2>Tổng kết tuần</h2><p class="sub">Kế hoạch, ý kiến và giờ làm thêm.</p>' +
+      '<label class="lbl">Công việc tuần tới<textarea class="rp-ta" rows="3" data-rps="next">' + esc(sm.next) + '</textarea></label>' +
+      '<label class="lbl">Ý kiến, đề xuất<textarea class="rp-ta" rows="2" data-rps="opinion">' + esc(sm.opinion) + '</textarea></label>' +
+      '<label class="lbl" style="max-width:180px">Giờ làm thêm<input class="rp-in" type="number" min="0" step="0.5" data-rps="hours" value="' + esc(sm.hours) + '"></label></div>' +
+      '<div class="rp-foot"><button class="btn" data-act="new">' + S.icon('plus') + ' Đề xuất việc mới</button><span class="sp"></span><button class="btn pri" data-act="repSubmit"' + (R.busy ? ' disabled' : '') + '>' + (R.busy ? 'Đang nộp…' : (subRow ? 'Nộp lại báo cáo' : 'Nộp báo cáo')) + '</button></div>';
+    return h;
+  }
+
+  function repTeam(st) {
+    var wk = st.rep.week, rows = st.reports.filter(function (r) { return r.week === wk; });
+    var people = st.users.filter(function (u) {
+      if ((window.APP_CONFIG.admins || []).indexOf((u.email || '').toLowerCase()) >= 0) return false;
+      return st.tasks.some(function (t) { return t.owner === u.id; }) || rows.some(function (r) { return r.who === u.id; });
+    });
+    var sub = {}; rows.forEach(function (r) { if (r.kind === 'Tổng kết') sub[r.who] = r; });
+    var done = people.filter(function (u) { return sub[u.id]; }), miss = people.filter(function (u) { return !sub[u.id]; });
+    var h = '<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))"><div class="kpi ok"><div class="n">' + done.length + '/' + people.length + '</div><div class="l">Đã nộp báo cáo ' + esc(wk) + '</div></div>' +
+      '<div class="kpi ' + (miss.length ? 'late' : '') + '"><div class="n">' + miss.length + '</div><div class="l">Chưa nộp' + (miss.length ? ': ' + miss.map(function (u) { return esc(u.name); }).join(', ') : '') + '</div></div>' +
+      '<div class="kpi info"><div class="n">' + rows.filter(function (r) { return r.kind === 'Việc'; }).length + '</div><div class="l">Dòng việc được báo cáo</div></div></div>' +
+      '<div style="display:flex;margin-bottom:10px"><span class="sp"></span><button class="btn" data-act="repCsv">' + S.icon('download') + ' Xuất CSV</button></div>';
+    h += people.map(function (u) {
+      var mine = rows.filter(function (r) { return r.who === u.id && r.kind === 'Việc'; }), sm = sub[u.id];
+      var body = mine.map(function (r) {
+        var t = st.byId[r.taskId] || st.tasks.filter(function (x) { return x.code === r.code; })[0];
+        return '<div class="rp-line"><div><b>' + esc(r.code || '') + '</b> ' + esc(t ? t.title : '') + '</div><div>' + rchip(r.rating) + '</div><div class="rp-res">' + esc(r.result || '') + '</div></div>';
+      }).join('') || '<div class="note">Chưa có dòng việc nào.</div>';
+      if (sm && (sm.next || sm.opinion || sm.hours)) body += '<div class="rp-extra">' + (sm.next ? '<div><b>Tuần tới:</b> ' + esc(sm.next) + '</div>' : '') + (sm.opinion ? '<div><b>Ý kiến:</b> ' + esc(sm.opinion) + '</div>' : '') + (sm.hours ? '<div><b>Giờ làm thêm:</b> ' + esc(sm.hours) + '</div>' : '') + '</div>';
+      return '<div class="card rp-person"><div class="rp-ph">' + S.avatar(u.name, u.id) + '<b>' + esc(u.name) + '</b><span class="sp"></span>' + (sm ? '<span class="chip ok">Đã nộp ' + S.fmt(sm.date) + '</span>' : '<span class="chip late">Chưa nộp</span>') + '</div>' + body + '</div>';
+    }).join('');
+    return h;
+  }
+
+  S.viewReport = function (st) {
+    var R = st.rep;
+    if (!st.hasReports) {
+      return st.isAdmin ? '<div class="card" style="max-width:640px"><h2>Bật báo cáo tuần trên web</h2><p class="sub">Cần một danh sách "Báo cáo tuần" trong site SERVICE để lưu báo cáo của từng người. Anh bấm nút dưới đây, ứng dụng tự tạo danh sách và các cột cần thiết.</p><button class="btn pri" data-act="repCreate">Tạo danh sách Báo cáo tuần</button></div>' :
+        '<div class="empty">Anh Thành chưa bật báo cáo tuần trên web. Khi bật xong, anh sẽ điền báo cáo tại đây.</div>';
+    }
+    var tabs = st.isAdmin ? '<div class="segs"><button class="' + (R.tab === 'mine' ? 'on' : '') + '" data-act="repTab" data-v="mine">Báo cáo của tôi</button><button class="' + (R.tab === 'team' ? 'on' : '') + '" data-act="repTab" data-v="team">Tổng hợp cả team</button></div>' : '';
+    var wk = '<label class="field"><select data-rep="week">' + st.repWeeks().map(function (w) { return '<option' + (w === R.week ? ' selected' : '') + '>' + esc(w) + '</option>'; }).join('') + '</select></label>';
+    return '<div class="rp-bar">' + tabs + '<span class="sp"></span>' + wk + '</div>' + (R.tab === 'team' && st.isAdmin ? repTeam(st) : repMine(st));
   };
 })(window.SGV);

@@ -5,12 +5,13 @@
   var VIEWS = {
     overview: { title: 'Tổng quan', icon: 'grid', filters: true },
     mine: { title: 'Việc của tôi', icon: 'mine' },
+    report: { title: 'Báo cáo tuần', icon: 'report' },
     board: { title: 'Bảng theo khâu', icon: 'board', filters: true, search: true },
     list: { title: 'Tất cả việc', icon: 'list', filters: true, search: true },
     approvals: { title: 'Chờ duyệt', icon: 'approve', adminOnly: false }
   };
   var st = S.st = {
-    data: null, me: null, isAdmin: false, users: [], uMap: {}, tasks: [], byId: {}, checks: [], choices: {},
+    data: null, me: null, isAdmin: false, users: [], uMap: {}, tasks: [], byId: {}, checks: [], reports: [], hasReports: false, rep: { week: '', tab: 'mine', drafts: {}, sum: { next: '', opinion: '', hours: '' }, busy: false }, choices: {},
     view: 'overview', f: { q: '', person: '', project: '', week: '', stage: '', quick: 'all' },
     sort: { k: 'due', dir: 1 }, drawer: null, showDone: false, loading: true, mock: false, listRows: [],
     engFields: ['progress', 'status', 'stage', 'note', 'waitFor', 'followers']
@@ -39,6 +40,24 @@
     var smp = ''; for (var i = 0; i < st.tasks.length; i++) { if (st.tasks[i].week) { smp = st.tasks[i].week; break; } }
     var m = /^(\D*)(\d+)(\D*)$/.exec(smp), w = S.isoWeek(S.today());
     return m ? m[1] + w + m[3] : 'W' + w;
+  }
+  function weekLabelFor(n) {
+    var cur = weekLabel(), w = S.isoWeek(S.today());
+    return cur.replace(String(w), String(n));
+  }
+  st.repWeeks = function () {
+    var w = S.isoWeek(S.today()), out = [];
+    for (var i = 0; i < 8 && w - i >= 1; i++) out.push(weekLabelFor(w - i));
+    return out;
+  };
+  function repInit(week) {
+    var R = st.rep, me = st.me || {};
+    R.week = week || weekLabel(); R.drafts = {}; R.sum = { next: '', opinion: '', hours: '' };
+    st.reports.forEach(function (r) {
+      if (r.week !== R.week || r.who !== me.id) return;
+      if (r.kind === 'Tổng kết') R.sum = { next: r.next || '', opinion: r.opinion || '', hours: r.hours == null ? '' : r.hours };
+      else if (r.taskId) R.drafts[r.taskId] = { rating: r.rating || '', result: r.result || '' };
+    });
   }
   function nextCode() {
     var cnt = {}, max = {}, width = {};
@@ -100,6 +119,7 @@
         '<label class="field"><select data-fl="project">' + opt(st.projects().map(function (p) { return [p, p]; }), f.project, 'Tất cả dự án') + '</select></label>' +
         '<label class="field"><select data-fl="week">' + opt(weeks().map(function (p) { return [p, p]; }), f.week, 'Tất cả tuần') + '</select></label>';
     }
+    if (st.isAdmin) h += '<button class="btn" data-act="imp" title="Nhập báo cáo tuần từ file Excel">' + S.icon('upload') + ' Nhập BCT</button>';
     h += '<button class="iconbtn" data-act="refresh" title="Tải lại">' + S.icon('refresh') + '</button>' +
       '<button class="btn pri" data-act="new">' + S.icon('plus') + (st.isAdmin ? ' Giao việc' : ' Đề xuất việc') + '</button>';
     $('#top').innerHTML = h;
@@ -111,6 +131,7 @@
       var d = new Date(), wd = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'][d.getDay()];
       h = '<p class="hello">Xin chào ' + esc(st.me.name) + ' · ' + wd + ' ' + S.fmtFull(S.today()) + '</p>' + S.viewOverview(st, base());
     } else if (st.view === 'mine') h = S.viewMine(st);
+    else if (st.view === 'report') h = S.viewReport(st);
     else if (st.view === 'board') h = S.viewBoard(st, base());
     else if (st.view === 'list') h = S.viewList(st, base());
     else h = S.viewApprovals(st);
@@ -121,6 +142,7 @@
     el.innerHTML = S.viewDrawer(st);
     var b = el.querySelector('.body'); if (b) b.scrollTop = top;
   }
+  function renderModal() { var el = $('#modal'); if (el) el.innerHTML = S.viewImport(st); }
   function renderAll() { renderNav(); renderTop(); renderContent(); renderDrawer(); }
 
   /* ---------- Ghi dữ liệu ---------- */
@@ -283,12 +305,98 @@
   }
   async function reload(quiet) {
     try {
-      var r = await Promise.all([st.data.listTasks(), st.data.listChecks()]);
-      setTasks(r[0]); st.checks = r[1];
+      var r = await Promise.all([st.data.listTasks(), st.data.listChecks(), st.data.listReports()]);
+      setTasks(r[0]); st.checks = r[1]; st.reports = r[2];
       if (st.drawer && st.drawer.mode === 'edit') { var t = st.byId[st.drawer.orig.id]; if (t) st.drawer.orig = t; }
-      renderNav(); renderContent(); if (!st.drawer) renderDrawer();
+      renderNav(); if (!(quiet && st.view === 'report')) renderContent(); if (!st.drawer) renderDrawer();
       if (!quiet) S.toast('Đã tải lại');
     } catch (e) { if (!quiet) S.toast('Không tải được: ' + e.message, 'err'); }
+  }
+
+  /* ---------- Nhập báo cáo tuần ---------- */
+  async function repSubmit() {
+    var R = st.rep, me = st.me; if (!me || !me.id || R.busy) return;
+    R.busy = true; renderContent();
+    var wk = R.week, today = S.today(), errs = [], n = 0;
+    var find = function (kind, taskId) { return st.reports.filter(function (r) { return r.kind === kind && r.week === wk && r.who === me.id && (kind === 'Tổng kết' || r.taskId === taskId); })[0]; };
+    var upsert = async function (payload, old) {
+      if (old) { await st.data.updateReport(old.id, payload); Object.assign(old, payload); }
+      else { var made = await st.data.createReport(payload); st.reports.push(made); }
+    };
+    var ids = Object.keys(R.drafts);
+    for (var i = 0; i < ids.length; i++) {
+      var id = +ids[i], d = R.drafts[id], t = st.byId[id]; if (!t) continue;
+      var old = find('Việc', id), has = d.rating || (d.result || '').trim();
+      if (!has && !old) continue;
+      try {
+        await upsert({ title: wk + ' · ' + me.name + ' · ' + t.code, week: wk, who: me.id, code: t.code, taskId: id, result: (d.result || '').trim(), rating: d.rating, kind: 'Việc', date: today }, old);
+        n++;
+        if (t.owner === me.id && d.rating) {
+          var stt = S.Bct.ratingToState(d.rating), patch = {};
+          if (stt && !S.isDone(t)) {
+            if (t.status !== stt.status) patch.status = stt.status;
+            if (t.stage !== stt.stage) patch.stage = stt.stage;
+            if (stt.progress != null && t.progress !== stt.progress) patch.progress = stt.progress;
+            if (Object.keys(patch).length) await patchTask(id, patch, true);
+          }
+        }
+      } catch (e) { errs.push(t.code + ': ' + e.message); }
+    }
+    try {
+      var sm = R.sum, oldS = find('Tổng kết');
+      if (sm.next || sm.opinion || sm.hours !== '' || oldS || n)
+        await upsert({ title: wk + ' · ' + me.name + ' · Tổng kết', week: wk, who: me.id, kind: 'Tổng kết', next: sm.next, opinion: sm.opinion, hours: sm.hours === '' ? null : +sm.hours, date: today }, oldS);
+    } catch (e) { errs.push('Tổng kết: ' + e.message); }
+    R.busy = false; renderAll();
+    if (errs.length) S.toast('Có lỗi: ' + errs.join(' | '), 'err'); else S.toast('Đã nộp báo cáo ' + wk);
+  }
+  function repCsv() {
+    var wk = st.rep.week, rows = [['Tuần', 'Người', 'Mã việc', 'Nội dung việc', 'Đánh giá', 'Kết quả', 'Tuần tới', 'Ý kiến', 'Giờ làm thêm', 'Ngày nộp']];
+    st.reports.filter(function (r) { return r.week === wk; }).forEach(function (r) {
+      var t = st.byId[r.taskId];
+      rows.push([r.week, st.uMap[r.who] ? st.uMap[r.who].name : '', r.code, t ? t.title : '', r.rating, r.result, r.next, r.opinion, r.hours, r.date]);
+    });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([S.csv(rows)], { type: 'text/csv;charset=utf-8' }));
+    a.download = 'bao-cao-tuan-' + wk + '.csv'; a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+  }
+  async function repCreate() {
+    try { st.hasReports = await st.data.createReportList(); st.reports = await st.data.listReports(); repInit(); renderAll(); S.toast('Đã tạo danh sách Báo cáo tuần'); }
+    catch (e) { S.toast('Chưa tự tạo được (' + e.message + '). Anh xem hướng dẫn tạo thủ công trong tài liệu triển khai.', 'err'); }
+  }
+  async function impRead(files) {
+    st.imp = { busy: 'Đang đọc ' + files.length + ' file…' }; renderModal();
+    var parsed = [];
+    for (var i = 0; i < files.length; i++) {
+      try { parsed.push(await S.Bct.readFile(files[i])); }
+      catch (e) { parsed.push({ file: files[i].name, error: e.message }); }
+    }
+    st.imp = { plan: S.Bct.plan(parsed, st.tasks, st.users) }; renderModal();
+  }
+  async function impApply() {
+    var pl = st.imp && st.imp.plan; if (!pl) return;
+    var ups = pl.updates.filter(function (u) { return u.include; }), prs = pl.proposals.filter(function (u) { return u.include; });
+    var okU = 0, okP = 0, errs = [], admin = st.users.filter(function (u) { return (C.admins || []).indexOf((u.email || '').toLowerCase()) >= 0; })[0];
+    for (var i = 0; i < ups.length; i++) {
+      st.imp = { busy: 'Đang ghi ' + (i + 1) + '/' + (ups.length + prs.length) + '…' }; renderModal();
+      var u = ups[i], patch = Object.assign({}, u.patch), t = st.byId[u.id];
+      patch.note = ((t && t.note) ? t.note + '\n' : '') + u.noteAdd;
+      try { await patchTask(u.id, patch, true); okU++; } catch (e) { errs.push(u.code + ': ' + e.message); }
+    }
+    for (var j = 0; j < prs.length; j++) {
+      st.imp = { busy: 'Đang ghi ' + (ups.length + j + 1) + '/' + (ups.length + prs.length) + '…' }; renderModal();
+      var p = prs[j];
+      try {
+        await createTask({ id: 0, title: p.text, code: p.code, owner: p.owner, collab: [], followers: [], project: '', week: weekLabel(), priority: 'Trung bình',
+          status: 'Chưa làm', stage: 'Chuẩn bị', type: 'Đề xuất', approval: 'Chờ duyệt', approver: admin ? admin.id : null, assigner: p.owner, progress: 0,
+          score: null, assigned: today(), due: null, done: null, repeat: 'Không', waitFor: null, reviewNote: '', note: '[BCT] Đề xuất từ báo cáo tuần của ' + p.who, source: 'Ứng dụng' }, []);
+        okP++;
+      } catch (e) { errs.push(p.code + ': ' + e.message); }
+    }
+    renderAll();
+    st.imp = { done: 'Đã cập nhật ' + okU + ' việc và tạo ' + okP + ' đề xuất mới (chờ anh duyệt).' + (errs.length ? ' Lỗi: ' + errs.join(' | ') : '') };
+    renderModal();
   }
   function exportCsv() {
     var rows = [['Mã', 'Nội dung', 'Phụ trách', 'Dự án', 'Khâu', 'Trạng thái', 'Tiến độ (%)', 'Ngày giao', 'Hạn', 'Quá hạn (ngày)', 'Ngày hoàn thành', 'Điểm']];
@@ -322,6 +430,14 @@
       case 'clearStage': st.f.stage = ''; renderContent(); break;
       case 'sort': var k = el.getAttribute('data-k'); st.sort = { k: k, dir: st.sort.k === k ? -st.sort.dir : 1 }; renderContent(); break;
       case 'export': exportCsv(); break;
+      case 'repTab': st.rep.tab = el.getAttribute('data-v'); renderContent(); break;
+      case 'repSubmit': repSubmit(); break;
+      case 'repCsv': repCsv(); break;
+      case 'repCreate': repCreate(); break;
+      case 'imp': st.imp = {}; renderModal(); break;
+      case 'impClose': st.imp = null; renderModal(); break;
+      case 'impPick': var fi = $('#imp-file'); fi.value = ''; fi.click(); break;
+      case 'impApply': impApply(); break;
       case 'toggleDone': st.showDone = !st.showDone; renderContent(); break;
       case 'toggleCollab':
         var dd = st.drawer, n = +id, i = dd.draft.collab.indexOf(n);
@@ -342,11 +458,16 @@
   document.addEventListener('change', function (e) {
     var el = e.target;
     if (el.matches('[data-act="ckToggle"]')) { ckToggle(el.getAttribute('data-id'), el.checked); return; }
+    if (el.matches('[data-rep="week"]')) { repInit(el.value); renderContent(); return; }
+    if (el.id === 'imp-file') { if (el.files.length) impRead(Array.prototype.slice.call(el.files)); return; }
+    if (el.matches('[data-imp]')) { var k = el.getAttribute('data-imp'), arr = k[0] === 'u' ? st.imp.plan.updates : st.imp.plan.proposals; arr[+k.slice(1)].include = el.checked; var b = $('#modal .body'), top = b ? b.scrollTop : 0; renderModal(); b = $('#modal .body'); if (b) b.scrollTop = top; return; }
     if (el.matches('[data-fl]')) { st.f[el.getAttribute('data-fl')] = el.value; renderTop(); renderContent(); return; }
     if (el.matches('[data-f]')) setField(el.getAttribute('data-f'), el);
   });
   document.addEventListener('input', function (e) {
     var el = e.target;
+    if (el.matches('[data-rp]')) { var dd = st.rep.drafts[+el.getAttribute('data-id')] = st.rep.drafts[+el.getAttribute('data-id')] || { rating: '', result: '' }; dd[el.getAttribute('data-rp')] = el.value; return; }
+    if (el.matches('[data-rps]')) { st.rep.sum[el.getAttribute('data-rps')] = el.value; return; }
     if (el.id === 'q') { st.f.q = el.value; clearTimeout(st._qt); st._qt = setTimeout(renderContent, 200); return; }
     if (el.matches('[data-f]') && (el.tagName === 'TEXTAREA' || el.type === 'range' || el.type === 'text' || el.type === 'date')) setField(el.getAttribute('data-f'), el);
   });
@@ -371,7 +492,7 @@
 
   /* ---------- Khởi động ---------- */
   function shell() {
-    $('#app').innerHTML = '<div class="shell"><aside class="side" id="side"></aside><div class="main"><div class="top" id="top"></div><div class="content" id="content"></div></div></div><nav class="bottomnav" id="bottomnav"></nav><div id="drawer"></div>';
+    $('#app').innerHTML = '<div class="shell"><aside class="side" id="side"></aside><div class="main"><div class="top" id="top"></div><div class="content" id="content"></div></div></div><nav class="bottomnav" id="bottomnav"></nav><div id="drawer"></div><div id="modal"></div><input type="file" id="imp-file" accept=".xlsx" multiple hidden>';
   }
   function gate(msg, loginBtn, err) {
     $('#app').innerHTML = '<div class="gate"><div class="logo">CNH</div><h1>Sổ giao việc CNH</h1><p>' + msg + '</p>' + (err ? '<div class="err">' + esc(err) + '</div>' : '') +
@@ -406,8 +527,9 @@
       var me = st.users.filter(function (u) { return u.email === email; })[0];
       st.me = me || { id: null, name: dispName, email: email };
       st.isAdmin = (C.admins || []).indexOf(email) >= 0;
-      var r = await Promise.all([data.listTasks(), data.listChecks()]);
-      setTasks(r[0]); st.checks = r[1];
+      st.hasReports = !!info.hasReports;
+      var r = await Promise.all([data.listTasks(), data.listChecks(), data.listReports()]);
+      setTasks(r[0]); st.checks = r[1]; st.reports = r[2]; repInit();
       st.view = st.isAdmin ? 'overview' : 'mine';
       if (!st.isAdmin && !me) S.toast('Tài khoản này chưa có trong danh sách người dùng của site SERVICE.', 'err');
       st.loading = false; renderAll();

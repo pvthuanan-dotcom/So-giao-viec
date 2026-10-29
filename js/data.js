@@ -11,6 +11,9 @@ window.SGV = window.SGV || {};
     score: 'Điểm đánh giá', assigned: 'Ngày giao', due: 'Hạn', done: 'Ngày hoàn thành', repeat: 'Lặp lại',
     waitFor: 'Chờ việc (ID)', reviewNote: 'Nhận xét duyệt', note: 'Ghi chú', source: 'Nguồn'
   };
+  // Danh sách "Báo cáo tuần": khoá nội bộ -> tên cột hiển thị
+  var RN = { week: 'Tuần', who: 'Người báo', code: 'Mã việc', taskId: 'Việc (ID)', result: 'Kết quả', rating: 'Đánh giá', hours: 'Giờ làm thêm', next: 'Tuần tới', opinion: 'Ý kiến', kind: 'Loại', date: 'Ngày nộp' };
+  S.RATINGS = ['Hoàn thành', 'Đang thực hiện', 'Chờ quyết định', 'Chưa hoàn thành'];
   var CK = { task: 'Việc', text: 'Tiêu chí', ok: 'Đạt', note: 'Ghi chú' };
   var PERSON = ['owner', 'approver', 'assigner'], PEOPLE = ['collab', 'followers'];
   var DATE = ['assigned', 'due', 'done'], NUM = ['progress', 'score', 'waitFor'];
@@ -20,7 +23,7 @@ window.SGV = window.SGV || {};
   /* ---------- Microsoft Graph ---------- */
   function GraphData(getToken) {
     var base = 'https://graph.microsoft.com/v1.0';
-    var siteId, listId, clId, cm = {}, ccm = {};
+    var siteId, listId, clId, rid = null, cm = {}, ccm = {}, rcm = {};
 
     async function api(method, path, body) {
       for (var i = 0; i < 4; i++) {
@@ -87,6 +90,39 @@ window.SGV = window.SGV || {};
       return { id: +it.id, taskId: tl ? +tl : null, text: f[ccm.text] || '', ok: !!f[ccm.ok], note: f[ccm.note] || '' };
     }
 
+    function rFromRaw(it) {
+      var f = it.fields || {}, r = { id: +it.id };
+      Object.keys(RN).forEach(function (k) {
+        var n = rcm[k];
+        if (!n) { r[k] = k === 'who' || k === 'taskId' || k === 'hours' || k === 'date' ? null : ''; return; }
+        if (k === 'who') { var v = f[n + 'LookupId']; r[k] = v ? +v : null; }
+        else if (k === 'date') r[k] = f[n] ? String(f[n]).slice(0, 10) : null;
+        else if (k === 'taskId' || k === 'hours') r[k] = f[n] == null ? null : +f[n];
+        else r[k] = f[n] == null ? '' : f[n];
+      });
+      return r;
+    }
+    function rToRaw(p) {
+      var f = {};
+      Object.keys(p).forEach(function (k) {
+        var n = rcm[k]; if (!n) return;
+        var v = p[k];
+        if (k === 'who') f[n + 'LookupId'] = v ? +v : null;
+        else if (k === 'date') f[n] = v ? v + 'T12:00:00Z' : null;
+        else if (k === 'taskId' || k === 'hours') f[n] = v == null || v === '' ? null : +v;
+        else f[n] = v == null || v === '' ? null : v;
+      });
+      if (p.title != null) f.Title = p.title;
+      return f;
+    }
+    async function loadReportList() {
+      var lists = await pages('/sites/' + siteId + '/lists?$select=id,displayName,name');
+      var r = lists.filter(function (l) { return norm(l.displayName) === norm(C.listReports || 'Báo cáo tuần'); })[0];
+      rid = r ? r.id : null;
+      if (rid) rcm = mapColumns(await pages('/sites/' + siteId + '/lists/' + rid + '/columns'), RN).map;
+      return !!rid;
+    }
+
     return {
       mode: 'live',
       async init() {
@@ -117,7 +153,9 @@ window.SGV = window.SGV || {};
             if (!users[id] && f.EMail) users[id] = { id: id, name: f.Title || f.EMail, email: String(f.EMail).toLowerCase() };
           });
         } catch (e) { /* dùng bảng cấu hình */ }
-        return { users: Object.keys(users).map(function (k) { return users[k]; }), choices: choices, hasChecklist: !!clId };
+        var hasR = false;
+        try { hasR = await loadReportList(); } catch (e) { /* không bắt buộc */ }
+        return { users: Object.keys(users).map(function (k) { return users[k]; }), choices: choices, hasChecklist: !!clId, hasReports: hasR };
       },
       async listTasks() {
         var items = await pages('/sites/' + siteId + '/lists/' + listId + '/items?$expand=fields&$top=500');
@@ -148,7 +186,42 @@ window.SGV = window.SGV || {};
         if ('note' in patch) f[ccm.note] = patch.note;
         await api('PATCH', '/sites/' + siteId + '/lists/' + clId + '/items/' + id + '/fields', f);
       },
-      async deleteCheck(id) { await api('DELETE', '/sites/' + siteId + '/lists/' + clId + '/items/' + id); }
+      async deleteCheck(id) { await api('DELETE', '/sites/' + siteId + '/lists/' + clId + '/items/' + id); },
+
+      /* ----- Báo cáo tuần ----- */
+      async listReports() {
+        if (!rid) return [];
+        var items = await pages('/sites/' + siteId + '/lists/' + rid + '/items?$expand=fields&$top=999');
+        return items.map(rFromRaw);
+      },
+      async createReport(r) {
+        var x = await api('POST', '/sites/' + siteId + '/lists/' + rid + '/items', { fields: rToRaw(r) });
+        return rFromRaw(x);
+      },
+      async updateReport(id, patch) {
+        await api('PATCH', '/sites/' + siteId + '/lists/' + rid + '/items/' + id + '/fields', rToRaw(patch));
+      },
+      // Quản lý bấm một nút để tạo danh sách "Báo cáo tuần" trong site SERVICE
+      async createReportList() {
+        var col = function (dn, name, extra) { return Object.assign({ name: name, displayName: dn }, extra); };
+        await api('POST', '/sites/' + siteId + '/lists', {
+          displayName: C.listReports || 'Báo cáo tuần', list: { template: 'genericList' },
+          columns: [
+            col('Tuần', 'Tuan', { text: {} }),
+            col('Người báo', 'NguoiBao', { personOrGroup: { allowMultipleSelection: false, chooseFromType: 'peopleOnly' } }),
+            col('Mã việc', 'MaViec', { text: {} }),
+            col('Việc (ID)', 'ViecId', { number: {} }),
+            col('Kết quả', 'KetQua', { text: { allowMultipleLines: true } }),
+            col('Đánh giá', 'DanhGia', { choice: { choices: S.RATINGS, displayAs: 'dropDownMenu' } }),
+            col('Giờ làm thêm', 'Gio', { number: {} }),
+            col('Tuần tới', 'TuanToi', { text: { allowMultipleLines: true } }),
+            col('Ý kiến', 'YKien', { text: { allowMultipleLines: true } }),
+            col('Loại', 'Loai', { choice: { choices: ['Việc', 'Tổng kết'], displayAs: 'dropDownMenu' } }),
+            col('Ngày nộp', 'Ngay', { dateTime: { format: 'dateOnly' } })
+          ]
+        });
+        return loadReportList();
+      }
     };
   }
 
@@ -199,9 +272,10 @@ window.SGV = window.SGV || {};
       return { tasks: tasks, checks: checks, nextTask: n + 1, nextCheck: cid + 1 };
     }
     function load() {
-      try { var s = localStorage.getItem(KEY); if (s) { db = JSON.parse(s); return; } } catch (e) { /* bỏ qua */ }
-      db = seed();
+      try { var s = localStorage.getItem(KEY); if (s) { db = JSON.parse(s); ensure(); return; } } catch (e) { /* bỏ qua */ }
+      db = seed(); ensure();
     }
+    function ensure() { db.reports = db.reports || []; db.nextReport = db.nextReport || 1; }
     function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) { /* bỏ qua */ } }
     var copy = function (o) { return JSON.parse(JSON.stringify(o)); };
     return {
@@ -210,7 +284,7 @@ window.SGV = window.SGV || {};
         load();
         return {
           users: C.users.map(function (u) { return { id: u.id, name: u.name, email: u.email.toLowerCase() }; }),
-          choices: {}, hasChecklist: true
+          choices: {}, hasChecklist: true, hasReports: db.hasReports !== false
         };
       },
       async listTasks() { return copy(db.tasks); },
@@ -232,6 +306,14 @@ window.SGV = window.SGV || {};
         save();
       },
       async deleteCheck(id) { db.checks = db.checks.filter(function (x) { return x.id !== id; }); save(); },
+      async listReports() { return copy(db.reports); },
+      async createReport(r) { var x = copy(r); x.id = db.nextReport++; db.reports.push(x); save(); return copy(x); },
+      async updateReport(id, patch) {
+        var r = db.reports.filter(function (x) { return x.id === id; })[0];
+        if (r) Object.keys(patch).forEach(function (k) { r[k] = patch[k]; });
+        save();
+      },
+      async createReportList() { db.hasReports = true; save(); return true; },
       reset: function () { try { localStorage.removeItem(KEY); } catch (e) { /* bỏ qua */ } load(); }
     };
   }
