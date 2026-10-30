@@ -9,7 +9,7 @@ window.SGV = window.SGV || {};
     project: 'Dự án', week: 'Tuần giao', priority: 'Ưu tiên', status: 'Trạng thái', stage: 'Khâu', type: 'Loại',
     approval: 'Phê duyệt', approver: 'Người duyệt', assigner: 'Người giao', progress: 'Tiến độ (%)',
     score: 'Điểm đánh giá', assigned: 'Ngày giao', due: 'Hạn', done: 'Ngày hoàn thành', repeat: 'Lặp lại',
-    waitFor: 'Chờ việc (ID)', reviewNote: 'Nhận xét duyệt', note: 'Ghi chú', source: 'Nguồn'
+    waitFor: 'Chờ việc (ID)', reviewNote: 'Nhận xét duyệt', note: 'Ghi chú', source: 'Nguồn', weekDone: 'Tuần hoàn thành'
   };
   // Danh sách "Báo cáo tuần": khoá nội bộ -> tên cột hiển thị
   var RN = { week: 'Tuần', who: 'Người báo', code: 'Mã việc', taskId: 'Việc (ID)', result: 'Kết quả', rating: 'Đánh giá', hours: 'Giờ làm thêm', next: 'Tuần tới', opinion: 'Ý kiến', kind: 'Loại', date: 'Ngày nộp' };
@@ -153,9 +153,10 @@ window.SGV = window.SGV || {};
             if (!users[id] && f.EMail) users[id] = { id: id, name: f.Title || f.EMail, email: String(f.EMail).toLowerCase() };
           });
         } catch (e) { /* dùng bảng cấu hình */ }
+        var missing = Object.keys(cm).indexOf('weekDone') < 0 ? ['weekDone'] : [];
         var hasR = false;
         try { hasR = await loadReportList(); } catch (e) { /* không bắt buộc */ }
-        return { users: Object.keys(users).map(function (k) { return users[k]; }), choices: choices, hasChecklist: !!clId, hasReports: hasR };
+        return { users: Object.keys(users).map(function (k) { return users[k]; }), choices: choices, hasChecklist: !!clId, hasReports: hasR, missing: missing };
       },
       async listTasks() {
         var items = await pages('/sites/' + siteId + '/lists/' + listId + '/items?$expand=fields&$top=500');
@@ -187,6 +188,41 @@ window.SGV = window.SGV || {};
         await api('PATCH', '/sites/' + siteId + '/lists/' + clId + '/items/' + id + '/fields', f);
       },
       async deleteCheck(id) { await api('DELETE', '/sites/' + siteId + '/lists/' + clId + '/items/' + id); },
+
+      // Liệt kê file báo cáo (.xlsx) trong thư viện Tài liệu của site, kể cả thư mục con (sâu tối đa 2 cấp)
+      async listReportFiles(folder) {
+        var out = [];
+        async function walk(path, depth) {
+          var enc = path ? ':/' + path.split('/').map(encodeURIComponent).join('/') + ':' : '';
+          var items;
+          try { items = await pages('/sites/' + siteId + '/drive/root' + enc + '/children?$top=200'); }
+          catch (e) { if (e.status === 404) throw new Error('Chưa có thư mục "' + folder + '" trong thư viện Tài liệu của site SERVICE.'); throw e; }
+          for (var i = 0; i < items.length; i++) {
+            var it = items[i];
+            if (it.folder && depth < 2) await walk((path ? path + '/' : '') + it.name, depth + 1);
+            else if (it.file && /\.xlsx$/i.test(it.name) && it.name.indexOf('~$') !== 0)
+              out.push({ id: it.id, name: it.name, size: it.size, modified: it.lastModifiedDateTime, url: it['@microsoft.graph.downloadUrl'] || null, path: path });
+          }
+        }
+        await walk(folder, 0);
+        return out;
+      },
+      async downloadFile(f) {
+        var r;
+        if (f.url) { try { r = await fetch(f.url); } catch (e) { r = null; } }
+        if (!r || !r.ok) r = await fetch(base + '/sites/' + siteId + '/drive/items/' + f.id + '/content', { headers: { Authorization: 'Bearer ' + await getToken() } });
+        if (!r.ok) throw new Error('Không tải được ' + f.name + ' (' + r.status + ')');
+        return new File([await r.arrayBuffer()], f.name, { lastModified: Date.parse(f.modified) || 0 });
+      },
+
+      // Thêm cột còn thiếu (hiện chỉ có "Tuần hoàn thành") vào Sổ giao việc
+      async addColumn(key) {
+        if (key !== 'weekDone') throw new Error('Cột không hỗ trợ');
+        await api('POST', '/sites/' + siteId + '/lists/' + listId + '/columns', { name: 'TuanHoanThanh', displayName: DN.weekDone, text: {} });
+        var cols = await pages('/sites/' + siteId + '/lists/' + listId + '/columns');
+        cm = mapColumns(cols, DN).map;
+        return Object.keys(cm).indexOf('weekDone') >= 0;
+      },
 
       /* ----- Báo cáo tuần ----- */
       async listReports() {
@@ -284,7 +320,7 @@ window.SGV = window.SGV || {};
         load();
         return {
           users: C.users.map(function (u) { return { id: u.id, name: u.name, email: u.email.toLowerCase() }; }),
-          choices: {}, hasChecklist: true, hasReports: db.hasReports !== false
+          choices: {}, hasChecklist: true, hasReports: db.hasReports !== false, missing: (S.mockNoCol && !db.weekDoneCol) ? ['weekDone'] : []
         };
       },
       async listTasks() { return copy(db.tasks); },
@@ -314,6 +350,9 @@ window.SGV = window.SGV || {};
         save();
       },
       async createReportList() { db.hasReports = true; save(); return true; },
+      async addColumn(key) { db.weekDoneCol = true; save(); return true; },
+      async listReportFiles() { throw new Error('Chế độ xem thử không có thư viện SharePoint. Anh chọn file từ máy.'); },
+      async downloadFile() { throw new Error('Không có'); },
       reset: function () { try { localStorage.removeItem(KEY); } catch (e) { /* bỏ qua */ } load(); }
     };
   }

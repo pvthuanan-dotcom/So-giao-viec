@@ -257,6 +257,7 @@ window.SGV = window.SGV || {};
     var checks = isNew ? d.newChecks.map(function (c, i) { return { id: 'n' + i, text: c, ok: false }; }) : st.checks.filter(function (c) { return c.taskId === t.id; });
     var done = checks.filter(function (c) { return c.ok; }).length;
 
+    var wkList = st.weekChoices(t.week), weekOpt = '<option value="">(chưa đặt)</option>' + wkList.map(function (w) { return '<option' + (w === t.week ? ' selected' : '') + '>' + esc(w) + '</option>'; }).join('');
     var h = '<div class="scrim" data-act="close"></div><aside class="drawer" role="dialog" aria-label="Chi tiết việc"><header><h2>' + (isNew ? (adm ? 'Giao việc mới' : 'Đề xuất việc mới') : esc(t.code || 'Chi tiết việc')) + '</h2>' +
       (isNew ? '' : S.statusChip(t) + S.dueChip(t)) + '<button class="iconbtn" data-act="close" title="Đóng">' + S.icon('x') + '</button></header><div class="body">';
     if (!isNew && !canE) h += '<div class="banner">Anh chỉ xem được việc này. Chỉ người phụ trách, người phối hợp và người giao việc mới sửa được.</div>';
@@ -266,6 +267,8 @@ window.SGV = window.SGV || {};
       '<div><label>Phụ trách</label><select data-f="owner"' + dis('owner') + '>' + userOpt(t.owner, '(chưa giao)') + '</select></div>' +
       '<div><label>Dự án</label><input data-f="project" list="dl-projects" value="' + esc(t.project || '') + '"' + dis('project') + '><datalist id="dl-projects">' + projects.map(function (p) { return '<option value="' + esc(p) + '">'; }).join('') + '</datalist></div>' +
       '<div class="full"><label>Phối hợp</label><div class="pick">' + u.map(function (x) { return '<button type="button" class="' + ((t.collab || []).indexOf(x.id) >= 0 ? 'on' : '') + '" data-act="toggleCollab" data-id="' + x.id + '"' + (canE ? '' : ' disabled') + '>' + esc(x.name) + '</button>'; }).join('') + '</div></div>' +
+      '<div><label>Tuần giao</label><select data-f="week"' + dis('week') + '>' + weekOpt + '</select></div>' +
+      '<div><label>Tuần hoàn thành</label><input value="' + esc(t.weekDone || '') + '" placeholder="(tự điền khi nghiệm thu)" disabled></div>' +
       '<div><label>Ngày giao</label><input type="date" data-f="assigned" value="' + esc(t.assigned || '') + '"' + dis('assigned') + '></div>' +
       '<div><label>Hạn hoàn thành</label><input type="date" data-f="due" value="' + esc(t.due || '') + '"' + dis('due') + '></div>' +
       '<div><label>Khâu</label><select data-f="stage"' + dis('stage') + '>' + opt(S.STAGES, t.stage || 'Chuẩn bị') + '</select></div>' +
@@ -310,17 +313,42 @@ window.SGV = window.SGV || {};
   };
 
   /* ---------- Hộp nhập báo cáo tuần ---------- */
+  function viewAssign(st, im) {
+    var a = im.asg, nc = a.creates.filter(function (x) { return x.include; }).length, nu = a.updates.filter(function (x) { return x.include; }).length;
+    var nm = function (id) { return id && st.uMap[id] ? st.uMap[id].name : '(trống)'; };
+    var h = '<div class="scrim" data-act="impClose"></div><aside class="drawer wide" role="dialog" aria-label="Đồng bộ giao việc từ Excel"><header><h2>Đồng bộ giao việc từ Excel</h2><button class="iconbtn" data-act="impClose" title="Đóng">' + S.icon('x') + '</button></header><div class="body">';
+    h += '<p class="note">File: ' + esc(a.file) + '. Excel làm chủ thông tin giao việc (mã, nội dung, người nhận, phối hợp, tuần giao, hạn). Trạng thái và tiến độ giữ nguyên, lấy từ báo cáo tuần.</p>';
+    h += '<div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr))"><div class="kpi ok"><div class="n">' + a.creates.length + '</div><div class="l">Việc mới sẽ tạo</div></div><div class="kpi info"><div class="n">' + a.updates.length + '</div><div class="l">Việc có thay đổi</div></div><div class="kpi"><div class="n">' + a.same + '</div><div class="l">Đã khớp, không đổi</div></div><div class="kpi"><div class="n">' + a.props + '</div><div class="l">Việc đề xuất chờ gán mã (bỏ qua)</div></div></div>';
+    if (a.warns.length) h += '<h3>Cần xem lại (' + a.warns.length + ')</h3><ul class="sm">' + a.warns.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul>';
+    if (a.creates.length) h += '<h3>Việc mới (' + nc + '/' + a.creates.length + ' sẽ tạo)</h3><table class="tbl"><thead><tr><th></th><th>Mã</th><th>Nội dung</th><th>Phụ trách</th><th>Tuần</th><th>Hạn</th></tr></thead><tbody>' + a.creates.map(function (c, i) {
+      return '<tr><td><input type="checkbox" data-asg="c' + i + '"' + (c.include ? ' checked' : '') + '></td><td><b>' + esc(c.code) + '</b></td><td class="sm">' + esc(c.want.title) + '</td><td>' + esc(c.ownerName || '(trống)') + '</td><td>' + esc(c.want.week) + '</td><td>' + (c.want.due ? S.fmt(c.want.due) : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    if (a.updates.length) h += '<h3>Việc có thay đổi (' + nu + '/' + a.updates.length + ' sẽ cập nhật)</h3><table class="tbl"><thead><tr><th></th><th>Mã</th><th>Việc</th><th>Đổi</th></tr></thead><tbody>' + a.updates.map(function (u, i) {
+      var d = [];
+      if ('owner' in u.patch) d.push('phụ trách: ' + esc(nm(u.before.owner)) + ' → <b>' + esc(nm(u.patch.owner)) + '</b>');
+      if ('due' in u.patch) d.push('hạn: ' + (u.before.due ? S.fmt(u.before.due) : '(trống)') + ' → <b>' + S.fmt(u.patch.due) + '</b>');
+      if ('week' in u.patch) d.push('tuần giao: ' + esc(u.before.week || '(trống)') + ' → <b>' + esc(u.patch.week) + '</b>');
+      if ('collab' in u.patch) d.push('phối hợp: <b>' + (u.patch.collab.map(nm).join(', ') || '(trống)') + '</b>');
+      if ('title' in u.patch) d.push('nội dung được sửa');
+      return '<tr class="' + (u.done ? 'dim' : '') + '"><td><input type="checkbox" data-asg="u' + i + '"' + (u.include ? ' checked' : '') + '></td><td><b>' + esc(u.code) + '</b></td><td class="sm">' + esc(u.title) + (u.done ? '<br><span class="chip">đã hoàn thành, mặc định không đổi</span>' : '') + '</td><td class="sm">' + d.join('<br>') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    if (a.orphans.length) h += '<h3>Có trên web nhưng không có trong Excel (' + a.orphans.length + ')</h3><p class="note">Không bị xóa hay sửa. Có thể là việc tạo trực tiếp trên web.</p><ul class="sm">' + a.orphans.slice(0, 15).map(function (t) { return '<li><b>' + esc(t.code) + '</b> ' + esc(t.title.slice(0, 80)) + '</li>'; }).join('') + (a.orphans.length > 15 ? '<li>…và ' + (a.orphans.length - 15) + ' việc khác</li>' : '') + '</ul>';
+    return h + '</div><footer><button class="btn" data-act="asgPick">Chọn file khác</button><span class="sp"></span><button class="btn" data-act="impClose">Hủy</button><button class="btn pri" data-act="asgApply"' + (nc + nu ? '' : ' disabled') + '>Xác nhận ghi ' + (nc + nu) + ' mục</button></footer></aside>';
+  }
   S.viewImport = function (st) {
     var im = st.imp; if (!im) return '';
-    var h = '<div class="scrim" data-act="impClose"></div><aside class="drawer wide" role="dialog" aria-label="Nhập báo cáo tuần"><header><h2>Nhập báo cáo tuần</h2><button class="iconbtn" data-act="impClose" title="Đóng">' + S.icon('x') + '</button></header><div class="body">';
+    var h = '<div class="scrim" data-act="impClose"></div><aside class="drawer wide" role="dialog" aria-label="Nhập báo cáo tuần"><header><h2>Đồng bộ báo cáo tuần</h2><button class="iconbtn" data-act="impClose" title="Đóng">' + S.icon('x') + '</button></header><div class="body">';
     if (im.busy) { h += '<div class="loading">' + esc(im.busy) + '</div></div></aside>'; return h; }
     if (im.done) {
       h += '<div class="banner ok">' + esc(im.done) + '</div></div><footer><button class="btn pri" data-act="impClose">Đóng</button></footer></aside>'; return h;
     }
+    if (im.asg) return viewAssign(st, im);
     var pl = im.plan;
     if (!pl) {
+      if (im.libMsg) { h += '<div class="banner">' + esc(im.libMsg) + '</div>'; }
       h += '<p>Chọn các file báo cáo tuần (<b>BCT_Wxx-2026_Sx_….xlsx</b>) mà nhân viên đã gửi. Có thể chọn nhiều file một lúc. Ứng dụng chỉ đọc, chưa ghi gì cho đến khi anh bấm xác nhận.</p>' +
-        '<p><button class="btn pri" data-act="impPick">' + S.icon('upload') + ' Chọn file Excel…</button></p>' + (im.error ? '<div class="banner err">' + esc(im.error) + '</div>' : '');
+        '<p><button class="btn pri" data-act="impPick">' + S.icon('upload') + ' Chọn file Excel…</button> <button class="btn" data-act="impLib">' + S.icon('refresh') + ' Thử đồng bộ lại từ thư viện</button></p>' +
+        '<h3>Giao việc từ Excel</h3><p>Chọn file <b>QUANLY_Bao_cao_tuan_KT.xlsm</b> để đưa việc giao trong sheet Mã Việc lên SharePoint. Nếu file đang mở trong Excel mà trình duyệt không đọc được, anh lưu một bản sao rồi chọn bản sao.</p><p><button class="btn" data-act="asgPick">' + S.icon('upload') + ' Chọn file Excel Quản lý…</button></p>' + (im.error ? '<div class="banner err">' + esc(im.error) + '</div>' : '');
       return h + '</div></aside>';
     }
     var nUp = pl.updates.filter(function (u) { return u.include; }).length, nPr = pl.proposals.filter(function (u) { return u.include; }).length;
@@ -329,13 +357,14 @@ window.SGV = window.SGV || {};
         if (f.error) return '<tr><td>' + esc(f.name) + '</td><td colspan="4"><span class="chip late">' + esc(f.error) + '</span></td></tr>';
         return '<tr><td class="sm">' + esc(f.name) + '</td><td>' + esc(f.who) + (f.person ? '' : ' <span class="chip warn">chưa khớp người dùng</span>') + '</td><td>' + esc(f.week) + '</td><td>' + f.entries + '</td><td>' + f.proposals + '</td></tr>';
       }).join('') + '</tbody></table>';
+    if (pl.ignored && pl.ignored.length) h += '<p class="note">Bỏ qua ' + pl.ignored.length + ' file bản cũ (cùng người, cùng tuần, đã có bản mới hơn): ' + pl.ignored.map(esc).join(', ') + '</p>';
     h += '<h3>Cập nhật việc đã giao (' + nUp + '/' + pl.updates.length + ' sẽ ghi)</h3>';
     if (!pl.updates.length) h += '<p class="note">Không có dòng nào khớp mã việc trong Sổ giao việc.</p>';
     else h += '<table class="tbl"><thead><tr><th></th><th>Mã</th><th>Việc</th><th>Người báo</th><th>Thay đổi</th></tr></thead><tbody>' + pl.updates.map(function (u, i) {
       var ch = [];
       if (u.patch.status) ch.push(esc(u.from.status) + ' → <b>' + esc(u.patch.status) + '</b>');
       if (u.patch.progress != null) ch.push('tiến độ ' + u.patch.progress + '%');
-      if (!ch.length) ch.push(u.driver ? 'giữ nguyên trạng thái' : 'chỉ ghi chú (' + u.role + ')');
+      if (!ch.length) ch.push(u.superseded ? 'chỉ ghi chú (đã có báo cáo tuần mới hơn)' : u.stale ? 'chỉ ghi chú (tuần cũ hơn lần nhập trước)' : u.driver ? 'giữ nguyên trạng thái' : 'chỉ ghi chú (' + u.role + ')');
       return '<tr class="' + (u.already ? 'dim' : '') + '"><td><input type="checkbox" data-imp="u' + i + '"' + (u.include ? ' checked' : '') + '></td><td><b>' + esc(u.code) + '</b></td><td class="sm">' + esc(u.title) + '</td><td>' + esc(u.who) + '<br><span class="note">' + esc(u.rating || '') + '</span></td><td class="sm">' + ch.join('; ') + (u.already ? '<br><span class="chip">đã nhập trước đó</span>' : '') + '</td></tr>';
     }).join('') + '</tbody></table>';
     if (pl.unmatched.length) h += '<h3>Mã việc không có trong Sổ giao việc (' + pl.unmatched.length + ')</h3><p class="note">Các dòng này sẽ không được ghi. Có thể nhân viên gõ sai mã hoặc việc chưa được giao.</p><ul class="sm">' + pl.unmatched.map(function (u) { return '<li><b>' + esc(u.code) + '</b> — ' + esc(u.who) + (u.did ? ': ' + esc(u.did.slice(0, 90)) : '') + '</li>'; }).join('') + '</ul>';

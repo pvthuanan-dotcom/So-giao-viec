@@ -38,7 +38,8 @@ window.SGV = window.SGV || {};
   var colIdx = function (ref) { var m = /^([A-Z]+)/.exec(ref), n = 0; for (var i = 0; i < m[1].length; i++) n = n * 26 + m[1].charCodeAt(i) - 64; return n - 1; };
   var textOf = function (el) { var t = el.getElementsByTagName('t'), s = ''; for (var i = 0; i < t.length; i++) s += t[i].textContent; return s; };
 
-  async function readRows(buf) {
+  async function readRows(buf, which, noFallback) {
+    which = which || ['xuất', 'xuat'];
     var z = await unzip(buf);
     var wb = xml(await z.text('xl/workbook.xml')), rels = xml(await z.text('xl/_rels/workbook.xml.rels'));
     var relMap = {}, rl = rels.getElementsByTagName('Relationship');
@@ -62,14 +63,15 @@ window.SGV = window.SGV || {};
           else if (v) val = t === 's' ? (shared[+v.textContent] || '') : t === 'b' ? (v.textContent === '1') : t === 'str' || t === 'e' ? v.textContent : (v.textContent === '' ? '' : +v.textContent);
           arr[colIdx(cell.getAttribute('r'))] = val;
         }
-        rows.push(arr);
+        arr.rn = +rs[r].getAttribute('r') || (r + 1); rows.push(arr);
       }
       return rows;
     };
     for (var s = 0; s < sheets.length && !found; s++) {
       var name = key(sheets[s].getAttribute('name'));
-      if (name === 'xuất' || name === 'xuat') found = await load(sheets[s]);
+      if (which.indexOf(name) >= 0) found = await load(sheets[s]);
     }
+    if (!found && noFallback) throw new Error('Không thấy sheet "' + which[0] + '" trong file này.');
     if (!found) {
       for (var s2 = 0; s2 < sheets.length && !found; s2++) {
         var rows = await load(sheets[s2]);
@@ -87,7 +89,70 @@ window.SGV = window.SGV || {};
   };
   var clean = function (v) { return nfc(v).replace(/\s+/g, ' ').trim(); };
 
+  var excelDate = function (v) {
+    if (typeof v === 'number' && v > 20000) return serialToYmd(v);
+    var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(v || '').trim());
+    if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    return asDate(v);
+  };
+
   S.Bct = {
+    /* ---------- Giao việc từ sheet "Mã Việc" của QUANLY_Bao_cao_tuan_KT.xlsm ---------- */
+    async readAssign(file) {
+      var rows = await readRows(await file.arrayBuffer(), ['mã việc', 'ma viec'], true), hr = -1;
+      for (var i = 0; i < Math.min(rows.length, 12); i++) if (rows[i] && key(rows[i][0]).indexOf('mã công việc') === 0) { hr = i; break; }
+      if (hr < 0) throw new Error('Sheet "Mã Việc" không đúng mẫu (không thấy cột "Mã công việc").');
+      var hdr = rows[hr].map(function (h) { return key(h); }), at = function (pre) { for (var j = 0; j < hdr.length; j++) if (hdr[j].indexOf(pre) === 0) return j; return -1; };
+      var ix = { code: at('mã công việc'), proj: at('khách hàng'), title: at('việc cần làm'), owner: at('giao cho'), pm1: at('phối hợp 1'), pm2: at('phối hợp 2'),
+        week: at('tuần giao'), due: at('hạn áp dụng'), due0: at('hạn ('), check: at('kiểm tra') };
+      ['code', 'title', 'owner', 'week'].forEach(function (k) { if (ix[k] < 0) throw new Error('Sheet "Mã Việc" thiếu cột cho ' + k + '.'); });
+      var out = { file: file.name, rows: [] }, g = function (r, k) { return ix[k] >= 0 ? r[ix[k]] : ''; };
+      for (var r = hr + 1; r < rows.length; r++) {
+        var x = rows[r] || [], code = clean(g(x, 'code')), title = clean(g(x, 'title'));
+        if (!code && !title) continue;
+        out.rows.push({ row: x.rn || r + 1, code: code, project: clean(g(x, 'proj')), title: title, owner: clean(g(x, 'owner')), pm1: clean(g(x, 'pm1')), pm2: clean(g(x, 'pm2')),
+          week: clean(g(x, 'week')), due: excelDate(g(x, 'due')) || excelDate(g(x, 'due0')), check: clean(g(x, 'check')) });
+      }
+      return out;
+    },
+    userByName: function (name, users) {
+      var n = key(name); if (!n || n === 'cả nhóm') return null;
+      var last = n.split(/\s+/).pop();
+      return users.filter(function (u) { return key(u.name) === n; })[0] || users.filter(function (u) { return key(u.name) === last; })[0] || null;
+    },
+    planAssign: function (parsed, tasks, users, projChoices) {
+      var byCode = {}, seen = {}, pl = { creates: [], updates: [], same: 0, props: 0, warns: [], orphans: [] };
+      tasks.forEach(function (t) { if (t.code) byCode[key(t.code)] = t; });
+      var proj = function (b) {
+        if (!projChoices) return b || '';
+        var hit = projChoices.filter(function (c) { return key(c) === key(b); })[0];
+        return hit || (projChoices.indexOf('Khác') >= 0 ? 'Khác' : '');
+      };
+      parsed.rows.forEach(function (r) {
+        if (!r.code || !r.title) { pl.warns.push('Dòng ' + r.row + ': thiếu mã hoặc nội dung, bỏ qua.'); return; }
+        if (/chờ gán mã/i.test(r.check)) { pl.props++; seen[key(r.code)] = 1; return; }
+        if (r.check && !/^ok$/i.test(r.check)) { pl.warns.push('Dòng ' + r.row + ' (' + r.code + '): cột Kiểm tra báo "' + r.check + '", bỏ qua.'); return; }
+        var k = key(r.code); if (seen[k]) { pl.warns.push('Dòng ' + r.row + ': mã ' + r.code + ' trùng, bỏ qua.'); return; } seen[k] = 1;
+        var ow = S.Bct.userByName(r.owner, users);
+        if (r.owner && !ow) pl.warns.push(r.code + ': "' + r.owner + '" chưa có trong danh sách người dùng của site, để trống người phụ trách.');
+        var col = [];
+        [r.pm1, r.pm2].forEach(function (n) { var u = S.Bct.userByName(n, users); if (u && col.indexOf(u.id) < 0 && (!ow || u.id !== ow.id)) col.push(u.id); else if (n && key(n) !== 'cả nhóm' && !u) pl.warns.push(r.code + ': người phối hợp "' + n + '" chưa có trong danh sách, bỏ qua.'); });
+        var want = { title: r.title, owner: ow ? ow.id : null, collab: col, week: r.week || '', due: r.due || null };
+        var t = byCode[k];
+        if (!t) { pl.creates.push({ code: r.code, project: proj(r.project), want: want, ownerName: ow ? ow.name : r.owner, include: true }); return; }
+        var patch = {}, diff = [];
+        if (key(t.title) !== key(want.title)) { patch.title = want.title; diff.push('nội dung'); }
+        if ((t.owner || null) !== want.owner && (want.owner || r.owner === '')) { patch.owner = want.owner; diff.push('người phụ trách'); }
+        if (JSON.stringify((t.collab || []).slice().sort()) !== JSON.stringify(col.slice().sort())) { patch.collab = col; diff.push('phối hợp'); }
+        if ((t.week || '') !== want.week && want.week) { patch.week = want.week; diff.push('tuần giao'); }
+        if ((t.due || null) !== want.due && want.due) { patch.due = want.due; diff.push('hạn'); }
+        if (!diff.length) { pl.same++; return; }
+        pl.updates.push({ id: t.id, code: t.code, title: t.title, patch: patch, diff: diff, done: S.isDone(t), before: { owner: t.owner, due: t.due, week: t.week }, include: !S.isDone(t) });
+      });
+      tasks.forEach(function (t) { if (t.code && !seen[key(t.code)] && t.type !== 'Đề xuất' && !S.isDone(t)) pl.orphans.push(t); });
+      return pl;
+    },
+
     async readFile(file) {
       var rows = await readRows(await file.arrayBuffer());
       var hdr = (rows[0] || []).map(function (h) { return key(h); });
@@ -97,7 +162,7 @@ window.SGV = window.SGV || {};
         tmp: col('Mã tạm'), prop: col('Việc đề xuất') };
       if (ix.code < 0 || ix.nv < 0) throw new Error('Bảng báo cáo thiếu cột Mã NV hoặc Mã việc.');
       var g = function (r, k) { return ix[k] >= 0 ? r[ix[k]] : ''; };
-      var out = { file: file.name, nv: '', name: '', week: '', entries: [], proposals: [], opinions: [] };
+      var out = { file: file.name, modified: file.lastModified || 0, nv: '', name: '', week: '', entries: [], proposals: [], opinions: [] };
       for (var i = 1; i < rows.length; i++) {
         var r = rows[i] || [];
         if (!out.nv && clean(g(r, 'nv'))) { out.nv = clean(g(r, 'nv')); out.name = clean(g(r, 'name')); out.week = clean(g(r, 'week')); }
@@ -129,9 +194,21 @@ window.SGV = window.SGV || {};
     },
 
     /* parsedFiles: kết quả readFile (hoặc {file, error}); tasks: danh sách việc hiện có */
-    plan: function (parsedFiles, tasks, users) {
+    weekRank: function (w) {
+      var m = /(\d+)(?:\D+(\d{4}))?/.exec(String(w || '')); if (!m) return 0;
+      return (m[2] ? +m[2] : 0) * 100 + +m[1];
+    },
+    plan: function (allFiles, tasks, users) {
+      // Cùng một người, cùng một tuần mà có nhiều file (gửi lại, sửa lại): chỉ lấy file sửa sau cùng
+      var best = {}, dropped = [];
+      allFiles.forEach(function (p) {
+        if (p.error) return;
+        var k = p.nv + '|' + p.week;
+        if (!best[k] || (p.modified || 0) > (best[k].modified || 0)) { if (best[k]) dropped.push(best[k]); best[k] = p; } else dropped.push(p);
+      });
+      var parsedFiles = allFiles.filter(function (p) { return p.error || best[p.nv + '|' + p.week] === p; });
       var byCode = {}; tasks.forEach(function (t) { if (t.code) byCode[key(t.code)] = t; });
-      var plan = { files: [], updates: [], unmatched: [], proposals: [], opinions: [], weeks: {} };
+      var plan = { files: [], updates: [], unmatched: [], proposals: [], opinions: [], weeks: {}, ignored: dropped.map(function (p) { return p.file; }) };
       var seen = {};
       parsedFiles.forEach(function (p) {
         if (p.error) { plan.files.push({ name: p.file, error: p.error }); return; }
@@ -157,6 +234,11 @@ window.SGV = window.SGV || {};
           var already = (t.note || '').indexOf(tag) >= 0;
           var patch = {};
           if (st && S.isDone(t)) st = null;                      // đã nghiệm thu thì không đổi lại
+          // báo cáo của tuần cũ hơn tuần đã nhập gần nhất cho việc này thì chỉ ghi chú, không đổi trạng thái
+          var rank = S.Bct.weekRank(p.week), lastRank = 0, mt, re = /\[BCT (\S+) [^\]\s]+\]/g;
+          while ((mt = re.exec(t.note || ''))) lastRank = Math.max(lastRank, S.Bct.weekRank(mt[1]));
+          var stale = rank < lastRank;
+          if (st && stale) st = null;
           if (st) {
             if (t.status !== st.status) patch.status = st.status;
             if (t.stage !== st.stage) patch.stage = st.stage;
@@ -167,7 +249,7 @@ window.SGV = window.SGV || {};
           if (seen[uk]) return; seen[uk] = 1;
           plan.updates.push({
             id: t.id, code: t.code, title: t.title, who: p.name, nv: p.nv, driver: drives, role: drives ? 'phụ trách' : (person && (t.collab || []).indexOf(person.id) >= 0 ? 'phối hợp' : 'khác'),
-            from: { status: t.status, stage: t.stage }, to: st, rating: last.rating, lines: lines, noteAdd: noteAdd, patch: patch, already: already, include: !already
+            rank: rank, last: last.date || '', stale: stale, from: { status: t.status, stage: t.stage }, to: st, rating: last.rating, lines: lines, noteAdd: noteAdd, patch: patch, already: already, include: !already
           });
         });
         p.proposals.forEach(function (pr) {
@@ -176,6 +258,14 @@ window.SGV = window.SGV || {};
           plan.proposals.push({ code: pr.code, text: pr.text, who: p.name, owner: person ? person.id : null, dup: dup, include: !dup && !!person });
         });
         p.opinions.forEach(function (o) { plan.opinions.push({ who: p.name, text: o }); });
+      });
+      // Một việc có báo cáo ở nhiều tuần trong cùng đợt đồng bộ: chỉ tuần mới nhất được đổi trạng thái
+      var top = {};
+      plan.updates.forEach(function (u) {
+        var c = top[u.id]; if (!c || u.rank > c.rank || (u.rank === c.rank && u.last > c.last)) top[u.id] = u;
+      });
+      plan.updates.forEach(function (u) {
+        if (top[u.id] !== u && u.to) { u.to = null; u.superseded = true; u.patch = { note: u.patch.note }; }
       });
       return plan;
     }

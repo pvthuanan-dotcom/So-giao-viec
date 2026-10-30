@@ -11,7 +11,7 @@
     approvals: { title: 'Chờ duyệt', icon: 'approve', adminOnly: false }
   };
   var st = S.st = {
-    data: null, me: null, isAdmin: false, users: [], uMap: {}, tasks: [], byId: {}, checks: [], reports: [], hasReports: false, rep: { week: '', tab: 'mine', drafts: {}, sum: { next: '', opinion: '', hours: '' }, busy: false }, choices: {},
+    data: null, me: null, isAdmin: false, users: [], uMap: {}, tasks: [], byId: {}, checks: [], reports: [], hasReports: false, missing: [], rep: { week: '', tab: 'mine', drafts: {}, sum: { next: '', opinion: '', hours: '' }, busy: false }, choices: {},
     view: 'overview', f: { q: '', person: '', project: '', week: '', stage: '', quick: 'all' },
     sort: { k: 'due', dir: 1 }, drawer: null, showDone: false, loading: true, mock: false, listRows: [],
     engFields: ['progress', 'status', 'stage', 'note', 'waitFor', 'followers']
@@ -59,6 +59,17 @@
       else if (r.taskId) R.drafts[r.taskId] = { rating: r.rating || '', result: r.result || '' };
     });
   }
+  // Nhãn tuần của một ngày bất kỳ, cùng kiểu với nhãn đang dùng (ví dụ W44-2026)
+  function weekOfDate(d) {
+    var cur = weekLabel(), w0 = String(S.isoWeek(S.today()));
+    return cur.replace(w0, String(S.isoWeek(d)));
+  }
+  st.weekChoices = function (cur) {
+    var w = S.isoWeek(S.today()), set = {}, out = [];
+    for (var i = -6; i <= 3; i++) { var n = w + i; if (n >= 1 && n <= 53) { var l = weekLabelFor(n); if (!set[l]) { set[l] = 1; out.push(l); } } }
+    if (cur && !set[cur]) out.unshift(cur);
+    return out;
+  };
   function nextCode() {
     var cnt = {}, max = {}, width = {};
     st.tasks.forEach(function (t) {
@@ -119,7 +130,7 @@
         '<label class="field"><select data-fl="project">' + opt(st.projects().map(function (p) { return [p, p]; }), f.project, 'Tất cả dự án') + '</select></label>' +
         '<label class="field"><select data-fl="week">' + opt(weeks().map(function (p) { return [p, p]; }), f.week, 'Tất cả tuần') + '</select></label>';
     }
-    if (st.isAdmin) h += '<button class="btn" data-act="imp" title="Nhập báo cáo tuần từ file Excel">' + S.icon('upload') + ' Nhập BCT</button>';
+    if (st.isAdmin) h += '<button class="btn" data-act="imp" title="Đọc báo cáo tuần trong thư viện SharePoint và cập nhật Sổ giao việc">' + S.icon('refresh') + ' Đồng bộ báo cáo</button>';
     h += '<button class="iconbtn" data-act="refresh" title="Tải lại">' + S.icon('refresh') + '</button>' +
       '<button class="btn pri" data-act="new">' + S.icon('plus') + (st.isAdmin ? ' Giao việc' : ' Đề xuất việc') + '</button>';
     $('#top').innerHTML = h;
@@ -129,7 +140,8 @@
     if (st.loading) { el.innerHTML = '<div class="loading">Đang tải dữ liệu…</div>'; return; }
     if (st.view === 'overview') {
       var d = new Date(), wd = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'][d.getDay()];
-      h = '<p class="hello">Xin chào ' + esc(st.me.name) + ' · ' + wd + ' ' + S.fmtFull(S.today()) + '</p>' + S.viewOverview(st, base());
+      if (st.isAdmin && st.missing.indexOf('weekDone') >= 0) h += '<div class="banner">Sổ giao việc chưa có cột <b>Tuần hoàn thành</b>. <button class="btn sm" data-act="colAdd">Thêm cột và điền cho các việc đã xong</button></div>';
+      h += '<p class="hello">Xin chào ' + esc(st.me.name) + ' · ' + wd + ' ' + S.fmtFull(S.today()) + '</p>' + S.viewOverview(st, base());
     } else if (st.view === 'mine') h = S.viewMine(st);
     else if (st.view === 'report') h = S.viewReport(st);
     else if (st.view === 'board') h = S.viewBoard(st, base());
@@ -214,8 +226,8 @@
           if (JSON.stringify(t[k]) !== JSON.stringify(o[k])) patch[k] = t[k];
         });
         if ('status' in patch) {
-          if (patch.status === 'Hoàn thành' && !t.done) patch.done = today();
-          if (patch.status !== 'Hoàn thành' && o.done) patch.done = null;
+          if (patch.status === 'Hoàn thành' && !t.done) { patch.done = today(); patch.weekDone = weekOfDate(today()); }
+          if (patch.status !== 'Hoàn thành' && o.done) { patch.done = null; patch.weekDone = null; }
         }
         if (!Object.keys(patch).length) { st.drawer = null; renderDrawer(); return; }
         if (!st.isAdmin) { var ok = {}; Object.keys(patch).forEach(function (k) { if (st.engFields.indexOf(k) >= 0) ok[k] = patch[k]; }); patch = ok; }
@@ -236,11 +248,11 @@
     var scoreEl = $('#acc-score'), score = scoreEl ? +scoreEl.value : (t.score || 4);
     var note = d && d.draft && d.orig && d.orig.id === id ? d.draft.reviewNote : t.reviewNote;
     try {
-      await patchTask(id, { status: 'Hoàn thành', stage: 'Nghiệm thu', done: today(), score: score, reviewNote: note || '', progress: 100, approval: 'Đã duyệt' }, true);
+      await patchTask(id, { status: 'Hoàn thành', stage: 'Nghiệm thu', done: today(), weekDone: weekOfDate(today()), score: score, reviewNote: note || '', progress: 100, approval: 'Đã duyệt' }, true);
       if (t.repeat && t.repeat !== 'Không') {
         var due0 = t.due || today();
         var nt = JSON.parse(JSON.stringify(t));
-        nt.id = 0; nt.code = nextCode(); nt.status = 'Chưa làm'; nt.stage = 'Chuẩn bị'; nt.progress = 0; nt.score = null; nt.done = null; nt.reviewNote = '';
+        nt.id = 0; nt.code = nextCode(); nt.status = 'Chưa làm'; nt.stage = 'Chuẩn bị'; nt.progress = 0; nt.score = null; nt.done = null; nt.weekDone = null; nt.reviewNote = '';
         nt.assigned = today(); nt.due = t.repeat === 'Hằng tuần' ? S.addDays(due0, 7) : S.addMonths(due0, 1); nt.week = weekLabel(); nt.approval = 'Đã duyệt';
         var items = st.checks.filter(function (c) { return c.taskId === id; }).map(function (c) { return c.text; });
         await createTask(nt, items);
@@ -314,6 +326,16 @@
   }
 
   /* ---------- Nhập báo cáo tuần ---------- */
+  async function colAdd() {
+    try {
+      var ok = await st.data.addColumn('weekDone');
+      if (!ok) throw new Error('Cột đã tạo nhưng chưa nhận ra, tải lại trang rồi thử lại');
+      st.missing = [];
+      var todo = st.tasks.filter(function (t) { return S.isDone(t) && t.done && !t.weekDone; });
+      for (var i = 0; i < todo.length; i++) await patchTask(todo[i].id, { weekDone: weekOfDate(todo[i].done) }, true);
+      renderAll(); S.toast('Đã thêm cột Tuần hoàn thành, điền cho ' + todo.length + ' việc đã xong');
+    } catch (e) { S.toast('Chưa thêm được cột: ' + e.message + '. Anh thêm tay: danh sách → Thêm cột → Một dòng văn bản, tên "Tuần hoàn thành".', 'err'); }
+  }
   async function repSubmit() {
     var R = st.rep, me = st.me; if (!me || !me.id || R.busy) return;
     R.busy = true; renderContent();
@@ -364,6 +386,53 @@
   async function repCreate() {
     try { st.hasReports = await st.data.createReportList(); st.reports = await st.data.listReports(); repInit(); renderAll(); S.toast('Đã tạo danh sách Báo cáo tuần'); }
     catch (e) { S.toast('Chưa tự tạo được (' + e.message + '). Anh xem hướng dẫn tạo thủ công trong tài liệu triển khai.', 'err'); }
+  }
+  // Đồng bộ: đọc các file báo cáo trong thư viện SharePoint, rồi lập kế hoạch cập nhật để anh xem trước
+  async function impLib() {
+    var folder = C.reportFolder || 'BaoCaoTuan/DaNhan';
+    st.imp = { busy: 'Đang tìm file báo cáo trong thư viện (' + folder + ')…' }; renderModal();
+    try {
+      var all = await st.data.listReportFiles(folder);
+      var cutoff = Date.now() - 30 * 864e5;
+      var recent = all.filter(function (f) { return !f.modified || Date.parse(f.modified) >= cutoff; });
+      if (!recent.length) { st.imp = { libMsg: all.length ? 'Có ' + all.length + ' file nhưng đều cũ hơn 30 ngày. Anh dùng nút chọn file nếu cần nhập lại.' : 'Thư mục chưa có file .xlsx nào.' }; renderModal(); return; }
+      var files = [];
+      for (var i = 0; i < recent.length; i++) {
+        st.imp = { busy: 'Đang tải file ' + (i + 1) + '/' + recent.length + '…' }; renderModal();
+        files.push(await st.data.downloadFile(recent[i]));
+      }
+      await impRead(files);
+    } catch (e) { st.imp = { libMsg: e.message }; renderModal(); }
+  }
+  async function asgRead(file) {
+    st.imp = { busy: 'Đang đọc sheet Mã Việc…' }; renderModal();
+    try {
+      var parsed = await S.Bct.readAssign(file);
+      st.imp = { asg: Object.assign(S.Bct.planAssign(parsed, st.tasks, st.users, st.choices.project), { file: file.name }) };
+    } catch (e) { st.imp = { libMsg: e.message }; }
+    renderModal();
+  }
+  async function asgApply() {
+    var a = st.imp && st.imp.asg; if (!a) return;
+    var cs = a.creates.filter(function (x) { return x.include; }), us = a.updates.filter(function (x) { return x.include; }), nOk = 0, errs = [];
+    var admin = st.users.filter(function (u) { return (C.admins || []).indexOf((u.email || '').toLowerCase()) >= 0; })[0], aid = admin ? admin.id : (st.me && st.me.id) || null;
+    for (var i = 0; i < us.length; i++) {
+      st.imp = { busy: 'Đang ghi ' + (i + 1) + '/' + (us.length + cs.length) + '…' }; renderModal();
+      try { await patchTask(us[i].id, us[i].patch, true); nOk++; } catch (e) { errs.push(us[i].code + ': ' + e.message); }
+    }
+    for (var j = 0; j < cs.length; j++) {
+      st.imp = { busy: 'Đang ghi ' + (us.length + j + 1) + '/' + (us.length + cs.length) + '…' }; renderModal();
+      var c = cs[j];
+      try {
+        await createTask({ id: 0, title: c.want.title, code: c.code, owner: c.want.owner, collab: c.want.collab, followers: [], project: c.project, week: c.want.week, priority: 'Trung bình',
+          status: 'Chưa làm', stage: 'Chuẩn bị', type: 'Giao việc', approval: 'Đã duyệt', approver: aid, assigner: aid, progress: 0, score: null, assigned: today(), due: c.want.due,
+          done: null, weekDone: null, repeat: 'Không', waitFor: null, reviewNote: '', note: '', source: 'Excel Mã Việc' }, []);
+        nOk++;
+      } catch (e) { errs.push(c.code + ': ' + e.message); }
+    }
+    renderAll();
+    st.imp = { done: 'Đã ghi ' + nOk + '/' + (us.length + cs.length) + ' mục từ Excel.' + (errs.length ? ' Lỗi: ' + errs.join(' | ') : '') };
+    renderModal();
   }
   async function impRead(files) {
     st.imp = { busy: 'Đang đọc ' + files.length + ' file…' }; renderModal();
@@ -430,11 +499,15 @@
       case 'clearStage': st.f.stage = ''; renderContent(); break;
       case 'sort': var k = el.getAttribute('data-k'); st.sort = { k: k, dir: st.sort.k === k ? -st.sort.dir : 1 }; renderContent(); break;
       case 'export': exportCsv(); break;
+      case 'colAdd': colAdd(); break;
       case 'repTab': st.rep.tab = el.getAttribute('data-v'); renderContent(); break;
       case 'repSubmit': repSubmit(); break;
       case 'repCsv': repCsv(); break;
       case 'repCreate': repCreate(); break;
-      case 'imp': st.imp = {}; renderModal(); break;
+      case 'imp': st.imp = {}; renderModal(); if (!st.mock) impLib(); break;
+      case 'impLib': impLib(); break;
+      case 'asgPick': var af = $('#asg-file'); af.value = ''; af.click(); break;
+      case 'asgApply': asgApply(); break;
       case 'impClose': st.imp = null; renderModal(); break;
       case 'impPick': var fi = $('#imp-file'); fi.value = ''; fi.click(); break;
       case 'impApply': impApply(); break;
@@ -459,6 +532,8 @@
     var el = e.target;
     if (el.matches('[data-act="ckToggle"]')) { ckToggle(el.getAttribute('data-id'), el.checked); return; }
     if (el.matches('[data-rep="week"]')) { repInit(el.value); renderContent(); return; }
+    if (el.id === 'asg-file') { if (el.files.length) asgRead(el.files[0]); return; }
+    if (el.matches('[data-asg]')) { var ak = el.getAttribute('data-asg'), aa = ak[0] === 'c' ? st.imp.asg.creates : st.imp.asg.updates; aa[+ak.slice(1)].include = el.checked; var ab = $('#modal .body'), at = ab ? ab.scrollTop : 0; renderModal(); ab = $('#modal .body'); if (ab) ab.scrollTop = at; return; }
     if (el.id === 'imp-file') { if (el.files.length) impRead(Array.prototype.slice.call(el.files)); return; }
     if (el.matches('[data-imp]')) { var k = el.getAttribute('data-imp'), arr = k[0] === 'u' ? st.imp.plan.updates : st.imp.plan.proposals; arr[+k.slice(1)].include = el.checked; var b = $('#modal .body'), top = b ? b.scrollTop : 0; renderModal(); b = $('#modal .body'); if (b) b.scrollTop = top; return; }
     if (el.matches('[data-fl]')) { st.f[el.getAttribute('data-fl')] = el.value; renderTop(); renderContent(); return; }
@@ -492,7 +567,7 @@
 
   /* ---------- Khởi động ---------- */
   function shell() {
-    $('#app').innerHTML = '<div class="shell"><aside class="side" id="side"></aside><div class="main"><div class="top" id="top"></div><div class="content" id="content"></div></div></div><nav class="bottomnav" id="bottomnav"></nav><div id="drawer"></div><div id="modal"></div><input type="file" id="imp-file" accept=".xlsx" multiple hidden>';
+    $('#app').innerHTML = '<div class="shell"><aside class="side" id="side"></aside><div class="main"><div class="top" id="top"></div><div class="content" id="content"></div></div></div><nav class="bottomnav" id="bottomnav"></nav><div id="drawer"></div><div id="modal"></div><input type="file" id="imp-file" accept=".xlsx" multiple hidden><input type="file" id="asg-file" accept=".xlsm,.xlsx" hidden>';
   }
   function gate(msg, loginBtn, err) {
     $('#app').innerHTML = '<div class="gate"><div class="logo">CNH</div><h1>Sổ giao việc CNH</h1><p>' + msg + '</p>' + (err ? '<div class="err">' + esc(err) + '</div>' : '') +
@@ -505,6 +580,7 @@
   async function boot() {
     var q = new URLSearchParams(location.search), data, email = '', dispName = '';
     if (q.get('today')) S.fakeToday = q.get('today');
+    if (q.get('nocol') === '1') S.mockNoCol = true;
     try {
       if (q.get('mock') === '1') {
         st.mock = true; data = S.MockData();
@@ -527,7 +603,7 @@
       var me = st.users.filter(function (u) { return u.email === email; })[0];
       st.me = me || { id: null, name: dispName, email: email };
       st.isAdmin = (C.admins || []).indexOf(email) >= 0;
-      st.hasReports = !!info.hasReports;
+      st.hasReports = !!info.hasReports; st.missing = info.missing || [];
       var r = await Promise.all([data.listTasks(), data.listChecks(), data.listReports()]);
       setTasks(r[0]); st.checks = r[1]; st.reports = r[2]; repInit();
       st.view = st.isAdmin ? 'overview' : 'mine';
